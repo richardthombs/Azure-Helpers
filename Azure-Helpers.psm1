@@ -1,4 +1,92 @@
-﻿Function New-WebServer
+﻿Function New-IISPair
+{
+    Param
+    (
+        [Parameter(Mandatory=$true)]
+        [string] $InstanceBaseName,
+
+        [Parameter(Mandatory=$true)]
+        [string] $ImageName,
+
+        [Parameter(Mandatory=$true)]
+        [string] $InstanceSize,
+
+        [Parameter(Mandatory=$true)]
+        [string] $AdminUserName,
+
+        [Parameter(Mandatory=$true)]
+        [string] $Password,
+
+        [Parameter(Mandatory=$true)]
+        [string] $DomainFQDN,
+
+        [string] $DomainNetBiosName=$DomainFQDN.Split('.')[0].ToUpper(),
+
+        [Parameter(Mandatory=$true)]
+        [string] $Subnet,
+
+        [Parameter(Mandatory=$true)]
+        [string] $ServiceName,
+
+        [Parameter(Mandatory=$true)]
+        [string] $AffinityGroup,
+
+        [Parameter(Mandatory=$true)]
+        [string] $VNetName,
+
+        [Parameter(Mandatory=$true)]
+        [Microsoft.WindowsAzure.Commands.ServiceManagement.Model.PersistentVMModel.DnsServer[]] $DnsSettings
+    )
+
+    $InstanceA="${InstanceBaseName}a"
+    $InstanceB="${InstanceBaseName}b"
+
+    $VMs = @()
+    $VMs += New-DomainJoinedVM -Name $InstanceA -ImageName $ImageName -InstanceSize $InstanceSize -AvailabilitySetName $ServiceName -AdminUserName $AdminUserName -Password $Password -DomainFQDN $DomainFQDN -DomainNetBiosName $DomainNetBiosName -SubnetName $Subnet | Add-WebServerEndpoints | Add-OctopusEndpoint -PublicPort 10933
+    $VMs += New-DomainJoinedVM -Name $InstanceB -ImageName $ImageName -InstanceSize $InstanceSize -AvailabilitySetName $ServiceName -AdminUserName $AdminUserName -Password $Password -DomainFQDN $DomainFQDN -DomainNetBiosName $DomainNetBiosName -SubnetName $Subnet | Add-WebServerEndpoints | Add-OctopusEndpoint -PublicPort 10934
+    New-AzureVM -ServiceName $ServiceName -AffinityGroup $AffinityGroup -VNetName $VNetName -DnsSettings $DnsSettings -VMs $VMs -WaitForBoot
+
+    return @($InstanceA,$InstanceB)
+}
+
+Function New-DomainJoinedVM
+{
+    Param
+    (
+        [Parameter(Mandatory=$True)]
+        [string] $Name,
+
+        [Parameter(Mandatory=$True)]
+        [string] $ImageName,
+
+        [Parameter(Mandatory=$True)]
+        [string] $AvailabilitySetName,
+
+        [Parameter(Mandatory=$True)]
+        [string] $AdminUserName,
+
+        [Parameter(Mandatory=$True)]
+        [string] $Password,
+
+        [Parameter(Mandatory=$True)]
+        [string] $DomainFQDN,
+
+        [Parameter(Mandatory=$True)]
+        [string] $DomainNetBiosName,
+
+        [Parameter(Mandatory=$True)]
+        [string] $Subnet,
+
+        [Parameter(Mandatory=$True)]
+        [string] $InstanceSize
+    )
+
+    return New-AzureVMConfig -Name $Name -InstanceSize $InstanceSize -ImageName $ImageName -AvailabilitySetName $AvailabilitySetName |
+        Add-AzureProvisioningConfig -WindowsDomain -AdminUsername $AdminUserName -Password $Password -JoinDomain $DomainFQDN -Domain $DomainNetBiosName -DomainUserName $AdminUserName -DomainPassword $Password |
+        Set-AzureSubnet $Subnet
+}
+
+Function New-WebServer
 {
     Param
     (
@@ -189,7 +277,6 @@ Function Initialize-WebServer
     }
 }
 
-
 Function Add-WebServerEndpoints
 {
     Param
@@ -198,10 +285,21 @@ Function Add-WebServerEndpoints
         [Microsoft.WindowsAzure.Commands.ServiceManagement.Model.IPersistentVM]$VM
     )
 
-    $VM |
-    Add-AzureEndpoint -Name "HTTP" -Protocol tcp -LocalPort 80 -PublicPort 80 -LBSetName "HTTP" -ProbePort 80 -ProbeProtocol http -ProbePath "/"
-    Add-AzureEndpoint -Name "HTTPS" -Protocol tcp -LocalPort 443 -PublicPort 443 -LBSetName "HTTPS" -ProbePort 443 -ProbeProtocol http -ProbePath "/" |
-    Add-AzureEndpoint -Name "Octopus" -Protocol tcp -LocalPort 10933 -PublicPort 10933
+    Add-AzureEndpoint -Name "HTTP" -Protocol tcp -LocalPort 80 -PublicPort 80 -LBSetName "HTTP" -ProbePort 80 -ProbeProtocol http -ProbePath "/" -VM $VM |
+    Add-AzureEndpoint -Name "HTTPS" -Protocol tcp -LocalPort 443 -PublicPort 443 -LBSetName "HTTPS" -ProbePort 443 -ProbeProtocol http -ProbePath "/"
+}
+
+Function Add-OctopusEndpoint
+{
+    Param
+    (
+        [Parameter(Mandatory=$True,ValueFromPipeline=$true)]
+        [Microsoft.WindowsAzure.Commands.ServiceManagement.Model.IPersistentVM]$VM,
+
+        [int] $PublicPort=10933
+    )
+
+    Add-AzureEndpoint -Name "Octopus" -Protocol tcp -LocalPort 10933 -PublicPort $PublicPort -VM $VM
 }
 
 <#
@@ -358,4 +456,18 @@ Function Get-LatestVMImage
     )
 
     return (Get-AzureVMImage | where { $_.ImageFamily -like "${ImageFamily}*" } | sort-object PublishedDate -Descending)[0].ImageName
+}
+
+Function New-Credential
+{
+    Param
+    (
+        [Parameter(Mandatory=$True)]
+        [string] $Username,
+
+        [Parameter(Mandatory=$True)]
+        [string] $Password
+    )
+
+    return New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $Username,(ConvertTo-SecureString -String $Password -AsPlainText -Force)
 }
