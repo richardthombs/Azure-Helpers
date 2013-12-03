@@ -1,4 +1,4 @@
-﻿Function New-IISPair
+﻿Function New-WebPair
 {
     Param
     (
@@ -23,7 +23,7 @@
         [string] $DomainNetBiosName=$DomainFQDN.Split('.')[0].ToUpper(),
 
         [Parameter(Mandatory=$true)]
-        [string] $Subnet,
+        [string] $SubnetName,
 
         [Parameter(Mandatory=$true)]
         [string] $ServiceName,
@@ -38,17 +38,87 @@
         [Microsoft.WindowsAzure.Commands.ServiceManagement.Model.PersistentVMModel.DnsServer[]] $DnsSettings
     )
 
-    $InstanceA="${InstanceBaseName}a"
-    $InstanceB="${InstanceBaseName}b"
+    $Instances = @("${InstanceBaseName}a","${InstanceBaseName}b")
 
     $VMs = @()
-    $VMs += New-DomainJoinedVM -Name $InstanceA -ImageName $ImageName -InstanceSize $InstanceSize -AvailabilitySetName $ServiceName -AdminUserName $AdminUserName -Password $Password -DomainFQDN $DomainFQDN -DomainNetBiosName $DomainNetBiosName -SubnetName $Subnet | Add-WebServerEndpoints | Add-OctopusEndpoint -PublicPort 10933
-    $VMs += New-DomainJoinedVM -Name $InstanceB -ImageName $ImageName -InstanceSize $InstanceSize -AvailabilitySetName $ServiceName -AdminUserName $AdminUserName -Password $Password -DomainFQDN $DomainFQDN -DomainNetBiosName $DomainNetBiosName -SubnetName $Subnet | Add-WebServerEndpoints | Add-OctopusEndpoint -PublicPort 10934
+    $octopusPort=10933
+    foreach ($i in $Instances)
+    {
+        $VMs += New-DomainJoinedVM -Name $InstanceA -ImageName $ImageName -InstanceSize $InstanceSize -AvailabilitySetName $ServiceName -AdminUserName $AdminUserName -Password $Password -DomainFQDN $DomainFQDN -DomainNetBiosName $DomainNetBiosName -SubnetName $SubnetName | Add-WebServerEndpoints | Add-OctopusEndpoint -LocalPort $octopusPort -PublicPort $octopusPort
+        $octopusPort++
+    }
+
     New-AzureVM -ServiceName $ServiceName -AffinityGroup $AffinityGroup -VNetName $VNetName -DnsSettings $DnsSettings -VMs $VMs -WaitForBoot
 
-    return @($InstanceA,$InstanceB)
+    return $Instances
 }
 
+Function New-SqlPair
+{
+    Param
+    (
+        [Parameter(Mandatory=$true)]
+        [string] $InstanceBaseName,
+
+        [Parameter(Mandatory=$true)]
+        [string] $ImageName,
+
+        [Parameter(Mandatory=$true)]
+        [string] $InstanceSize,
+
+        [Parameter(Mandatory=$true)]
+        [string] $AdminUserName,
+
+        [Parameter(Mandatory=$true)]
+        [string] $Password,
+
+        [Parameter(Mandatory=$true)]
+        [string] $DomainFQDN,
+
+        [string] $DomainNetBiosName=$DomainFQDN.Split('.')[0].ToUpper(),
+
+        [Parameter(Mandatory=$true)]
+        [string] $SubnetName,
+
+        [Parameter(Mandatory=$true)]
+        [string] $ServiceName,
+
+        [Parameter(Mandatory=$true)]
+        [string] $AffinityGroup,
+
+        [Parameter(Mandatory=$true)]
+        [string] $VNetName,
+
+        [Parameter(Mandatory=$true)]
+        [Microsoft.WindowsAzure.Commands.ServiceManagement.Model.PersistentVMModel.DnsServer[]] $DnsSettings,
+
+        [Parameter(Mandatory=$True)]
+        [int]$TotalSizeInGb,
+
+        [int]$NumberOfDisks=1
+    )
+
+    $Instances = @("${InstanceBaseName}a","${InstanceBaseName}b")
+
+    $VMs = @()
+    foreach ($i in $Instances)
+    {
+        $VMs += New-DomainJoinedVM -Name $i -ImageName $ImageName -InstanceSize $InstanceSize -AvailabilitySetName $ServiceName -AdminUserName $AdminUserName -Password $Password -DomainFQDN $DomainFQDN -DomainNetBiosName $DomainNetBiosName -SubnetName $SubnetName |
+            Add-DataDisks -TotalSizeInGb $TotalSizeInGb -NumberOfDisks $NumberOfDisks
+    }
+
+    New-AzureVM -ServiceName $ServiceName -AffinityGroup $AffinityGroup -VNetName $VNetName -DnsSettings $DnsSettings -VMs $VMs -WaitForBoot
+
+    return $Instances
+}
+
+<#
+.SYNOPSIS
+    Returns a VM configuration that is ready to be joined to the specified domain.
+
+ .DESCRIPTION
+    This assumes that the local admin credentials are the same as the domain admin.
+#>
 Function New-DomainJoinedVM
 {
     Param
@@ -75,7 +145,7 @@ Function New-DomainJoinedVM
         [string] $DomainNetBiosName,
 
         [Parameter(Mandatory=$True)]
-        [string] $Subnet,
+        [string] $SubnetName,
 
         [Parameter(Mandatory=$True)]
         [string] $InstanceSize
@@ -83,125 +153,7 @@ Function New-DomainJoinedVM
 
     return New-AzureVMConfig -Name $Name -InstanceSize $InstanceSize -ImageName $ImageName -AvailabilitySetName $AvailabilitySetName |
         Add-AzureProvisioningConfig -WindowsDomain -AdminUsername $AdminUserName -Password $Password -JoinDomain $DomainFQDN -Domain $DomainNetBiosName -DomainUserName $AdminUserName -DomainPassword $Password |
-        Set-AzureSubnet $Subnet
-}
-
-Function New-WebServer
-{
-    Param
-    (
-        [Parameter(Mandatory=$True)]
-        [string]$ServiceName,
-
-        [string]$Name = $ServiceName,
-
-        [Parameter(Mandatory=$True)]
-        [string]$AffinityGroup,
-
-        [Parameter(Mandatory=$True)]
-        [string]$AdminUsername,
-
-        [Parameter(Mandatory=$True)]
-        [string]$Password,
-
-        [Parameter(Mandatory=$True)]
-        [string]$VNetName,
-
-        [Parameter(Mandatory=$True)]
-        [string]$SubnetName,
-
-        [string]$AvailabilitySetName = $ServiceName,
-
-        [string]$InstanceSize = "Small",
-
-        [string]$ImageFamilyName = "Windows Server 2012 R2 Datacenter"
-    )
-
-    $webImage = Get-LatestVMImage -FamilyName $ImageFamilyName
-    Install-Server -Name $Name -ServiceName $ServiceName -ImageName $webImage -InstanceSize $InstanceSize -AffinityGroup $AffinityGroup -AvailabilitySetName $ServiceName -AdminUsername $AdminUserName -Password $Password -VNetName $VNetName -SubnetNames $SubnetName
-    Initialize-Server -ServiceName $ServiceName -Name $Name -AdminUsername $AdminUserName -Password $Password
-    Initialize-WebServer -ServiceName $ServiceName -Name $Name -AdminUsername $AdminUserName -Password $Password
-}
-
-Function New-SqlServer
-{
-    Param
-    (
-        [Parameter(Mandatory=$True)]
-        [string]$ServiceName,
-
-        [string]$Name = $ServiceName,
-
-        [Parameter(Mandatory=$True)]
-        [string]$AffinityGroup,
-
-        [Parameter(Mandatory=$True)]
-        [string]$AdminUsername,
-
-        [Parameter(Mandatory=$True)]
-        [string]$Password,
-
-        [Parameter(Mandatory=$True)]
-        [string]$VNetName,
-
-        [Parameter(Mandatory=$True)]
-        [string]$SubnetName,
-
-        [string]$AvailabilitySetName = $ServiceName,
-
-        [string]$InstanceSize = "Medium",
-
-        [int]$NumberOfDisks = 4,
-
-        [int]$DatabaseVolumeSizeInGb = 500,
-
-        [string]$ImageFamilyName = "SQL Server 2012 SP1 Standard on Windows Server 2012"
-    )
-
-    $sqlImage = Get-LatestVMImage -ImageFamily $ImageFamilyName
-    Install-Server -Name $Name -ServiceName $ServiceName -ImageName $sqlImage -InstanceSize $InstanceSize -AffinityGroup $AffinityGroup -AvailabilitySetName $ServiceName -AdminUsername $AdminUserName -Password $Password -VNetName $VNetName -SubnetNames $SubnetName
-    Get-AzureVM -Name $Name -ServiceName $ServiceName | Add-DataDisks -TotalSizeInGb $DatabaseVolumeSizeInGb -NumberOfDisks $NumberOfDisks | Update-AzureVM
-    Initialize-Server -ServiceName $ServiceName -Name $Name -AdminUsername $AdminUserName -Password $Password
-    Initialize-SqlServer -ServiceName $ServiceName -Name $Name -AdminUsername $AdminUserName -Password $Password
-}
-
-Function Install-Server
-{
-    Param(
-        [Parameter(Mandatory=$True)]
-        [string]$Name,
-
-        [Parameter(Mandatory=$True)]
-        [string]$ImageName,
-
-        [Parameter(Mandatory=$True)]
-        [string]$ServiceName = $Name,
-
-        [Parameter(Mandatory=$True)]
-        [string]$AffinityGroup,
-
-        [Parameter(Mandatory=$True)]
-        [string]$AdminUsername,
-
-        [Parameter(Mandatory=$True)]
-        [string]$Password,
-
-        [Parameter(Mandatory=$True)]
-        [string]$InstanceSize,
-
-        [Parameter(Mandatory=$True)]
-        [string]$SubnetNames,
-
-        [Parameter(Mandatory=$True)]
-        [string]$VNetName
-    )
-
-    $vm = New-AzureVMConfig -Name $Name -InstanceSize $InstanceSize -ImageName $ImageName -AvailabilitySetName $ServiceName -ErrorAction Stop
-    $vm = $vm  | Add-AzureProvisioningConfig -Windows -AdminUsername $AdminUsername -Password $Password -ErrorAction Stop
-    $vm = $vm | Set-AzureSubnet -SubnetNames $SubnetNames -ErrorAction Stop
-    New-AzureVM -ServiceName $ServiceName -AffinityGroup $AffinityGroup -VNetName $VNetName -WaitForBoot -VMs $vm -ErrorAction Stop
-
-    Install-WinRMCertificate -ServiceName $ServiceName -Name $Name -ErrorAction Stop
+        Set-AzureSubnet -SubnetNames $SubnetName
 }
 
 Function IsAdmin
@@ -210,10 +162,22 @@ Function IsAdmin
     return $IsAdmin
 }
 
+<#
+.SYNOPSIS
+    Installs the WinRM certificate for the specified VM locally so it can be used with WinRM remoting.
+#>
 Function Install-WinRMCertificate()
 {
-    param([string] $ServiceName, [string] $Name)
-	if((IsAdmin) -eq $false)
+    Param
+    (
+        [Parameter(Mandatory=$true)]
+        [string] $ServiceName,
+
+        [Parameter(Mandatory=$true)]
+        [string] $Name
+    )
+
+	if ((IsAdmin) -eq $false)
 	{
 		Write-Error "Must run PowerShell elevated to install WinRM certificates."
 		return
@@ -237,46 +201,10 @@ Function Install-WinRMCertificate()
 	Remove-Item $certTempFile
 }
 
-Function Initialize-WebServer
-{
-    Param(
-        [Parameter(Mandatory=$True)]
-        [string]$Name,
-
-        [Parameter(Mandatory=$True)]
-        [string]$ServiceName,
-
-        [Parameter(Mandatory=$True)]
-        [string]$AdminUsername,
-
-        [Parameter(Mandatory=$True)]
-        [string]$Password
-    )
-
-    Get-AzureVM -ServiceName $ServiceName -Name $Name | Add-WebServerEndpoints | Update-AzureVM
-
-    $ManagementUri = Get-AzureWinRMUri -ServiceName $ServiceName -Name $Name
-    $SecurePassword = $Password | ConvertTo-SecureString -AsPlainText -Force
-    $Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $AdminUsername,$SecurePassword
-
-    Invoke-Command -ConnectionUri $ManagementUri -Credential $Credential -ScriptBlock {
-
-        # Install ASP.NET
-        Write-Host "Installing ASP.NET..."
-        Enable-WindowsOptionalFeature -Online -FeatureName IIS-ASPNET45 -All
-        Enable-WindowsOptionalFeature -Online -FeatureName WCF-HTTP-Activation45 -All
-
-        # Create the Application Pool our deploy script uses
-        Write-Host "Creating IIS App Pool..."
-        Import-Module WebAdministration
-        $PoolName = "IIS:\AppPools\ASP.NET v4.0"
-        if (!(test-path $PoolName))
-        {
-            new-item -Path $PoolName
-        }
-    }
-}
-
+<#
+.SYNOPSIS
+    Adds load balanced endpoints for HTTP and HTTPS
+#>
 Function Add-WebServerEndpoints
 {
     Param
@@ -289,6 +217,10 @@ Function Add-WebServerEndpoints
     Add-AzureEndpoint -Name "HTTPS" -Protocol tcp -LocalPort 443 -PublicPort 443 -LBSetName "HTTPS" -ProbePort 443 -ProbeProtocol http -ProbePath "/"
 }
 
+<#
+.SYNOPSIS
+    Adds an endpoint for Octopus Deploy.
+#>
 Function Add-OctopusEndpoint
 {
     Param
@@ -296,10 +228,11 @@ Function Add-OctopusEndpoint
         [Parameter(Mandatory=$True,ValueFromPipeline=$true)]
         [Microsoft.WindowsAzure.Commands.ServiceManagement.Model.IPersistentVM]$VM,
 
-        [int] $PublicPort=10933
+        [int] $PublicPort = 10933,
+        [int] $LocalPort = $PublicPort
     )
 
-    Add-AzureEndpoint -Name "Octopus" -Protocol tcp -LocalPort 10933 -PublicPort $PublicPort -VM $VM
+    Add-AzureEndpoint -Name "Octopus" -Protocol tcp -LocalPort $LocalPort -PublicPort $PublicPort -VM $VM
 }
 
 <#
@@ -332,26 +265,6 @@ Function Add-DataDisks
     return $VM
 }
 
-Function Initialize-SqlServer
-{
-    Param
-    (
-        [Parameter(Mandatory=$True)]
-        [string]$Name,
-
-        [Parameter(Mandatory=$True)]
-        [string]$ServiceName,
-
-        [Parameter(Mandatory=$True)]
-        [string]$AdminUsername,
-
-        [Parameter(Mandatory=$True)]
-        [string]$Password
-    )
-
-    New-AzureStripedVolume -ServiceName $ServiceName -Name $Name -AdminUsername $AdminUserName -Password $Password
-}
-
 <#
 .SYNOPSIS
     Pool all available physical disks into a new storage pool and stripe them together
@@ -366,19 +279,12 @@ Function New-AzureStripedVolume
         [Parameter(Mandatory=$True)]
         [string]$ServiceName,
 
-        [Parameter(Mandatory=$True)]
-        [string]$AdminUsername,
-
-        [Parameter(Mandatory=$True)]
-        [string]$Password
+        [System.Management.Automation.PSCredential]$Credential = (Get-Credential)
     )
 
-    $ManagementUri = Get-AzureWinRMUri -ServiceName $ServiceName -Name $Name
-    $SecurePassword = $Password | ConvertTo-SecureString -AsPlainText -Force
-    $Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $AdminUsername,$SecurePassword
+    $WinRMUri = Get-AzureWinRMUri -ServiceName $ServiceName -Name $Name
 
-    Invoke-Command -ConnectionUri $ManagementUri -Credential $Credential -ScriptBlock {
-
+    Invoke-Command -ConnectionUri $WinRMUri -Credential $Credential -ScriptBlock {
         write-host "Creating storage pool..."
         $availableDisks = Get-PhysicalDisk -CanPool $true
         New-StoragePool -FriendlyName "Storage" -StorageSubSystemFriendlyName "Storage Spaces*" -PhysicalDisks $availableDisks
@@ -391,38 +297,9 @@ Function New-AzureStripedVolume
     }
 }
 
-Function Initialize-Server
-{
-    Param(
-        [Parameter(Mandatory=$True)]
-        [string]$Name,
-
-        [Parameter(Mandatory=$True)]
-        [string]$ServiceName,
-
-        [Parameter(Mandatory=$True)]
-        [string]$AdminUsername,
-
-        [Parameter(Mandatory=$True)]
-        [string]$Password
-    )
-
-    $ManagementUri = Get-AzureWinRMUri -ServiceName $ServiceName -Name $Name
-    $SecurePassword = $Password | ConvertTo-SecureString -AsPlainText -Force
-    $Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $AdminUsername,$SecurePassword
-
-    Invoke-Command -ConnectionUri $ManagementUri -Credential $Credential -ScriptBlock {
-        write-host "Enabling ping.."
-        netsh advfirewall firewall set rule name="File and Printer Sharing (Echo Request - ICMPv4-In)" new enable=yes
-
-        write-host "Enabling file sharing..."
-        netsh advfirewall firewall set rule group="File and Printer Sharing" new enable=Yes
-    }
-}
-
 <#
 .SYNOPSIS
-    Launches a remote powershell to the specified server, prompting for credentials if none are supplied
+    Launches a remote PowerShell to the specified server, prompting for credentials if none are supplied
 #>
 Function Enter-Server
 {
@@ -433,11 +310,11 @@ Function Enter-Server
         [Parameter(Mandatory=$True)]
         [string]$ServiceName,
 
-        [System.Management.Automation.PSCredential]$Credential=(Get-Credential)
+        [System.Management.Automation.PSCredential]$Credential = (Get-Credential)
     )
 
-    $ManagementUri = Get-AzureWinRMUri -ServiceName $ServiceName -Name $Name
-    Enter-PSSession -ConnectionUri $ManagementUri -Credential $Credential
+    $WinRMUri = Get-AzureWinRMUri -ServiceName $ServiceName -Name $Name
+    Enter-PSSession -ConnectionUri $WinRMUri -Credential $Credential
 }
 
 <#
@@ -458,6 +335,13 @@ Function Get-LatestVMImage
     return (Get-AzureVMImage | where { $_.ImageFamily -like "${ImageFamily}*" } | sort-object PublishedDate -Descending)[0].ImageName
 }
 
+<#
+.SYNOPSIS
+    Creates a new PSCredential from a plaintext username and password.
+
+.EXAMPLE
+    New-Credential -Username "Admin" -Password "SillyPassword"
+#>
 Function New-Credential
 {
     Param
