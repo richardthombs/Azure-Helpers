@@ -44,11 +44,11 @@
     $octopusPort=10933
     foreach ($i in $Instances)
     {
-        $VMs += New-DomainJoinedVM -Name $InstanceA -ImageName $ImageName -InstanceSize $InstanceSize -AvailabilitySetName $ServiceName -AdminUserName $AdminUserName -Password $Password -DomainFQDN $DomainFQDN -DomainNetBiosName $DomainNetBiosName -SubnetName $SubnetName | Add-WebServerEndpoints | Add-OctopusEndpoint -LocalPort $octopusPort -PublicPort $octopusPort
+        $VMs += New-DomainJoinedVM -Name $i -ImageName $ImageName -InstanceSize $InstanceSize -AvailabilitySetName $ServiceName -AdminUserName $AdminUserName -Password $Password -DomainFQDN $DomainFQDN -DomainNetBiosName $DomainNetBiosName -SubnetName $SubnetName | Add-WebServerEndpoints | Add-OctopusEndpoint -LocalPort $octopusPort -PublicPort $octopusPort
         $octopusPort++
     }
 
-    New-AzureVM -ServiceName $ServiceName -AffinityGroup $AffinityGroup -VNetName $VNetName -DnsSettings $DnsSettings -VMs $VMs -WaitForBoot
+    New-AzureVM -ServiceName $ServiceName -AffinityGroup $AffinityGroup -VNetName $VNetName -DnsSettings $DnsSettings -VMs $VMs -WaitForBoot > $null
 
     return $Instances
 }
@@ -107,7 +107,7 @@ Function New-SqlPair
             Add-DataDisks -TotalSizeInGb $TotalSizeInGb -NumberOfDisks $NumberOfDisks
     }
 
-    New-AzureVM -ServiceName $ServiceName -AffinityGroup $AffinityGroup -VNetName $VNetName -DnsSettings $DnsSettings -VMs $VMs -WaitForBoot
+    New-AzureVM -ServiceName $ServiceName -AffinityGroup $AffinityGroup -VNetName $VNetName -DnsSettings $DnsSettings -VMs $VMs -WaitForBoot > $null
 
     return $Instances
 }
@@ -257,6 +257,7 @@ Function Add-DataDisks
     )
 
     $individualDiskSize = [Math]::Ceiling($TotalSizeInGb/$NumberOfDisks)
+    $individualDiskSize = [Math]::Min($individualDiskSize,1023)
 
     for ($i =0; $i -lt $NumberOfDisks; $i++)
     {
@@ -354,4 +355,35 @@ Function New-Credential
     )
 
     return New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $Username,(ConvertTo-SecureString -String $Password -AsPlainText -Force)
+}
+
+Function Set-ServiceCredentials
+{
+    Param
+    (
+        [Parameter(Mandatory=$True)]
+        [string]$ComputerName,
+
+        [Parameter(Mandatory=$True)]
+        [string]$ServiceName,
+
+        [Parameter(Mandatory=$True)]
+        [string]$AccountName,
+
+        [Parameter(Mandatory=$True)]
+        [string]$AccountPassword
+    )
+
+    $filter = 'Name=' + "'" + $ServiceName + "'" + ''
+    $service = Get-WMIObject -ComputerName $ComputerName -namespace "root\cimv2" -class Win32_Service -Filter $filter
+    if ($service -eq $null) { return; }
+
+    $service.Change($null,$null,$null,$null,$null,$null,$AccountName,$AccountPassword)
+    $service.StopService()
+    while ($service.Started)
+    {
+        sleep 2
+        $service = Get-WMIObject -ComputerName $ComputerName -namespace "root\cimv2" -class Win32_Service -Filter $filter
+    }
+    $service.StartService()
 }
