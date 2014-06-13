@@ -2,8 +2,13 @@ PowerShell tools to help automate VM creation in Windows Azure.
 
 ## Installation
 
-Download and install the [Windows Azure Powershell cmdlets](http://msdn.microsoft.com/en-us/library/azure/jj156055.aspx)
+1. Download and install the [Windows Azure Powershell cmdlets](http://msdn.microsoft.com/en-us/library/azure/jj156055.aspx)
+2. Configure them with your Azure account information
+```powershell
+Add-AzureAccount
+```
 
+3. Install the Azure-Helpers module
 ```powershell
 mkdir $home\Documents\WindowsPowerShell\Modules
 cd $home\Documents\WindowsPowerShell\Modules
