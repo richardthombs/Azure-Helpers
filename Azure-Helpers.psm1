@@ -53,6 +53,7 @@
     return $Instances
 }
 
+
 Function New-SqlPair
 {
     Param
@@ -112,6 +113,7 @@ Function New-SqlPair
     return $Instances
 }
 
+
 <#
 .SYNOPSIS
     Returns a VM configuration that is ready to be joined to the specified domain.
@@ -156,11 +158,13 @@ Function New-DomainJoinedVM
         Set-AzureSubnet -SubnetNames $SubnetName
 }
 
+
 Function IsAdmin
 {
     $IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator") 
     return $IsAdmin
 }
+
 
 <#
 .SYNOPSIS
@@ -201,6 +205,7 @@ Function Install-WinRMCertificate()
 	Remove-Item $certTempFile
 }
 
+
 <#
 .SYNOPSIS
     Adds load balanced endpoints for HTTP and HTTPS
@@ -216,6 +221,7 @@ Function Add-WebServerEndpoints
     Add-AzureEndpoint -Name "HTTP" -Protocol tcp -LocalPort 80 -PublicPort 80 -LBSetName "HTTP" -ProbePort 80 -ProbeProtocol http -ProbePath "/" -VM $VM |
     Add-AzureEndpoint -Name "HTTPS" -Protocol tcp -LocalPort 443 -PublicPort 443 -LBSetName "HTTPS" -ProbePort 443 -ProbeProtocol http -ProbePath "/"
 }
+
 
 <#
 .SYNOPSIS
@@ -234,6 +240,7 @@ Function Add-OctopusEndpoint
 
     Add-AzureEndpoint -Name "Octopus" -Protocol tcp -LocalPort $LocalPort -PublicPort $PublicPort -VM $VM
 }
+
 
 <#
 .SYNOPSIS
@@ -266,10 +273,14 @@ Function Add-DataDisks
     return $VM
 }
 
+
 <#
 .SYNOPSIS
     Pool all available physical disks into a new storage pool and stripe them together
     into a single NTFS volume optimized for database use.
+
+.EXAMPLE
+    New-AzureStripedVolume -ServiceName myservice -Name myvmname -Credential $secret
 #>
 Function New-AzureStripedVolume
 {
@@ -290,13 +301,117 @@ Function New-AzureStripedVolume
         $availableDisks = Get-PhysicalDisk -CanPool $true
         New-StoragePool -FriendlyName "Storage" -StorageSubSystemFriendlyName "Storage Spaces*" -PhysicalDisks $availableDisks
 
-        write-host "Creating database volume..."
+        write-host "Creating volume..."
         New-VirtualDisk -StoragePoolFriendlyName "Storage" -FriendlyName "Data" -ResiliencySettingName Simple -ProvisioningType Fixed -Interleave 1MB -NumberOfDataCopies 1 -NumberOfColumns $availableDisks.Count -UseMaximumSize |
-        Initialize-Disk -PartitionStyle GPT -PassThru |
-        New-Partition -DriveLetter F -UseMaximumSize |
-        Format-Volume -FileSystem NTFS -AllocationUnitSize 64KB -NewFileSystemLabel "Data" -Confirm:$false
+            Initialize-Disk -PartitionStyle GPT -PassThru |
+            New-Partition -DriveLetter F -UseMaximumSize |
+            Format-Volume -FileSystem NTFS -AllocationUnitSize 64KB -NewFileSystemLabel "Data" -Confirm:$false
     }
 }
+
+
+Function Enable-AzureAspNet
+{
+    Param(
+        [Parameter(Mandatory=$True)]
+        [string]$Name,
+
+        [Parameter(Mandatory=$True)]
+        [string]$ServiceName,
+
+        [System.Management.Automation.PSCredential]$Credential = (Get-Credential)
+    )
+
+    $WinRMUri = Get-AzureWinRMUri -ServiceName $ServiceName -Name $Name
+
+    Invoke-Command -ConnectionUri $WinRMUri -Credential $Credential -ScriptBlock {
+        Enable-WindowsOptionalFeature -Online -FeatureName IIS-ASPNET45 -All
+        Enable-WindowsOptionalFeature -Online -FeatureName WCF-HTTP-Activation -All
+        Enable-WindowsOptionalFeature -Online -FeatureName IIS-RequestMonitor -All
+    }    
+}
+
+
+Function New-AzureUser
+{
+    Param(
+        [Parameter(Mandatory=$True)]
+        [string]$Name,
+
+        [Parameter(Mandatory=$True)]
+        [string]$ServiceName,
+
+        [System.Management.Automation.PSCredential]$Credential = (Get-Credential),
+
+        [Parameter(Mandatory=$True)]
+        [string]$Username,
+
+        [Parameter(Mandatory=$True)]
+        [string]$Password,
+
+        [Parameter(Mandatory=$True)]
+        [string]$Description
+    )
+
+    $winRMUri = Get-AzureWinRMUri -ServiceName $ServiceName -Name $Name
+
+    Invoke-Command -ConnectionUri $winRMUri -Credential $Credential -ScriptBlock {
+        Write-Host "Creating user $using:Username"
+        [ADSI]$server = "WinNT://localhost"
+        $user = $server.Create("User", $using:Username)
+        $user.SetPassword($using:Password)
+        $user.Put("Description", $using:Description);
+        $flags = $user.UserFlags.value -bor 0x10000
+        $user.Put("UserFlags", $flags)
+        $user.SetInfo()
+    }
+}
+
+
+Function New-AzureIISAppPool
+{
+    Param(
+        [Parameter(Mandatory=$True)]
+        [string]$Name,
+
+        [Parameter(Mandatory=$True)]
+        [string]$ServiceName,
+
+        [System.Management.Automation.PSCredential]$Credential = (Get-Credential),
+
+        [Parameter(Mandatory=$True)]
+        [string]$PoolName,
+
+        [Parameter(Mandatory=$True)]
+        [string]$ProcessModelUserName,
+
+        [Parameter(Mandatory=$True)]
+        [string]$ProcessModelPassword
+    )
+
+    $winRMUri = Get-AzureWinRMUri -ServiceName $ServiceName -Name $Name
+
+    Invoke-Command -ConnectionUri $winRMUri -Credential $Credential -ScriptBlock {
+        # Need WebAdministration
+        Import-Module WebAdministration
+
+        # Create the Application Pool
+        $poolPath = "IIS:\AppPools\$using:PoolName"
+        Write-Host "Creating AppPool at ${poolPath}"
+        if (!(Test-Path $poolPath))
+        {
+            New-Item -Path $poolPath
+        }
+
+        # Configure it
+        $Pool = Get-Item $poolPath
+        $Pool.processModel.userName = $using:ProcessModelUserName
+        $Pool.processModel.password = $using:ProcessModelPassword
+        $Pool.processModel.identityType = 3
+        $Pool | Set-Item
+    }
+}
+
 
 <#
 .SYNOPSIS
@@ -333,7 +448,13 @@ Function Get-LatestVMImage
         [string] $ImageFamily
     )
 
-    return (Get-AzureVMImage | where { $_.ImageFamily -like "${ImageFamily}*" } | sort-object PublishedDate -Descending)[0].ImageName
+    $images = (Get-AzureVMImage | where { $_.ImageFamily -like "${ImageFamily}*" } | sort-object PublishedDate -Descending)
+    if ($images.Length -eq 0)
+    {
+        Write-Error "Could not find a VM image with an ImageFamily like ${ImageFamily}*}"
+        return $null
+    }
+    return $images[0]
 }
 
 <#
