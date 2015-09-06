@@ -302,7 +302,7 @@ Function New-AzureStripedVolume
         New-StoragePool -FriendlyName "Storage" -StorageSubSystemFriendlyName "Storage Spaces*" -PhysicalDisks $availableDisks
 
         write-host "Creating volume..."
-        New-VirtualDisk -StoragePoolFriendlyName "Storage" -FriendlyName "Data" -ResiliencySettingName Simple -ProvisioningType Fixed -Interleave 1MB -NumberOfDataCopies 1 -NumberOfColumns $availableDisks.Count -UseMaximumSize |
+        New-VirtualDisk -StoragePoolFriendlyName "Storage" -FriendlyName "Data" -ResiliencySettingName Simple -ProvisioningType Fixed -Interleave 64KB -NumberOfDataCopies 1 -NumberOfColumns $availableDisks.Count -UseMaximumSize |
             Initialize-Disk -PartitionStyle GPT -PassThru |
             New-Partition -DriveLetter F -UseMaximumSize |
             Format-Volume -FileSystem NTFS -AllocationUnitSize 64KB -NewFileSystemLabel "Data" -Confirm:$false
